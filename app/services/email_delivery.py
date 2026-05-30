@@ -3,13 +3,19 @@ import smtplib
 import html
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from pathlib import Path
+
 from dotenv import load_dotenv
 import markdown
 
+# load_dotenv() only reads CWD; running this file directly often leaves CWD != repo root.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+load_dotenv(_PROJECT_ROOT / ".env")
 load_dotenv()
 
-MY_EMAIL = os.getenv("MY_EMAIL")
-APP_PASSWORD = os.getenv("APP_PASSWORD")
+MY_EMAIL = (os.getenv("MY_EMAIL") or "").strip()
+# Gmail shows app passwords as "xxxx xxxx xxxx xxxx"; SMTP expects 16 chars without spaces.
+APP_PASSWORD = (os.getenv("APP_PASSWORD") or "").strip().replace(" ", "")
 
 
 def send_email(subject: str, body_text: str, body_html: str = None, recipients: list = None):
@@ -39,9 +45,22 @@ def send_email(subject: str, body_text: str, body_html: str = None, recipients: 
         part2 = MIMEText(body_html, "html")
         msg.attach(part2)
     
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-        smtp.login(MY_EMAIL, APP_PASSWORD)
-        smtp.sendmail(MY_EMAIL, recipients, msg.as_string())
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(MY_EMAIL, APP_PASSWORD)
+            smtp.sendmail(MY_EMAIL, recipients, msg.as_string())
+    except smtplib.SMTPAuthenticationError as e:
+        hint = (
+            "Gmail rejected the login. Checklist:\n"
+            f"  • .env loaded from: {_PROJECT_ROOT / '.env'} (file exists: {(_PROJECT_ROOT / '.env').exists()})\n"
+            f"  • MY_EMAIL must match the Google account that created the app password (currently {MY_EMAIL!r}).\n"
+            f"  • APP_PASSWORD must be a 16-character App Password (not your normal Gmail password); length now: {len(APP_PASSWORD)}.\n"
+            "  • If this is a Google Workspace (@company.com) account, your admin may block app passwords — use OAuth2 or relay SMTP instead.\n"
+            "  • Regenerate the app password at https://myaccount.google.com/apppasswords and paste it with no quotes."
+        )
+        raise RuntimeError(
+            f"SMTP authentication failed ({e.smtp_code}): {e.smtp_error!r}\n\n{hint}"
+        ) from e
 
 
 def markdown_to_html(markdown_text: str) -> str:
